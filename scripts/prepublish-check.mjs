@@ -10,13 +10,15 @@
  * Exits 0 only if every automated step passes.
  */
 
-import { execSync } from 'node:child_process';
+import { execSync, spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, statSync, realpathSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = resolve(__dirname, '..');
+const require = createRequire(import.meta.url);
 
 const RED = '\x1b[31m';
 const GREEN = '\x1b[32m';
@@ -129,9 +131,28 @@ step('Manifest sanity (Chrome + Firefox)', () => {
 // web-ext's file walker doesn't follow it. web-ext exits non-zero only on
 // errors; the ~29 warnings (innerHTML, Chrome-only APIs, ignored sidePanel
 // permission, service-worker-ignored) are expected and pass.
+//
+// web-ext 10.x intermittently dies by signal (SIGBUS/SIGSEGV on Node 24)
+// when launched via npx, so invoke its bin directly with this Node instead
+// and retry once on a signal death (never on a lint failure — a non-zero
+// exit without a signal is a real error and must still fail the gate).
 step('web-ext lint (0 errors)', () => {
   const distReal = realpathSync(resolve(root, 'packages/extension/dist'));
-  run(`npx web-ext lint -s "${distReal}" --output text`, { stdio: 'pipe' });
+  const webExtBin = resolve(dirname(require.resolve('web-ext')), 'bin/web-ext.js');
+  const lint = () =>
+    spawnSync(process.execPath, [webExtBin, 'lint', '-s', distReal, '--output', 'text'], {
+      cwd: root, stdio: 'pipe', encoding: 'utf8',
+    });
+  let result = lint();
+  if (result.error) throw result.error;
+  if (result.signal) {
+    console.warn(`   web-ext lint died by signal ${result.signal} — retrying once`);
+    result = lint();
+    if (result.error) throw result.error;
+  }
+  if (result.status !== 0) {
+    throw new Error(`web-ext lint failed (exit ${result.status})\n${result.stdout ?? ''}${result.stderr ?? ''}`);
+  }
 });
 
 step('Focused extension logic tests', () => {
