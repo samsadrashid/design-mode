@@ -46,7 +46,8 @@ server — drive them live; do not look for task files on disk.
    - Call `set_change_status` with `{ status: 'in_progress', ids: [id] }`
      so the user sees a WIP badge on the row you're working.
    - Map the `selector` to its source in the codebase. Reference files as
-     `path:line`.
+     `path:line`. If a change has `sourceLocation`, open that file:line
+     first.
    - For a comment, read its `text`; for a region comment, call
      `get_screenshot` with the region first so you can see the area.
    - For a `tokenChanges` entry, find where that token is defined in the
