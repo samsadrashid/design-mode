@@ -5,6 +5,7 @@
 // ============================================================
 
 import type { SourceLocation, ComponentHierarchy } from '@shared/types';
+import { resolveViaSourceMaps as resolveSourcemapHit, type SourcemapHit } from './sourcemap-resolver';
 
 // ── React Fiber Tree Walking ──
 
@@ -233,6 +234,32 @@ function extractSourceFromFunction(fn: Function): SourceLocation | null {
     }
   } catch {}
   return null;
+}
+
+// ── Source-Map Fallback ──
+
+// Map positions are 0-based; SourceLocation keeps the 1-based
+// convention used by React _debugSource and Svelte loc.
+export function toSourceLocation(hit: SourcemapHit): SourceLocation {
+  const clean = cleanSourcePath(hit.file);
+  return {
+    file: hit.file,
+    line: hit.line + 1,
+    column: hit.column + 1,
+    ...(hit.component ? { component: hit.component } : {}),
+    framework: 'unknown',
+    cleanPath: clean,
+  };
+}
+
+export async function resolveViaSourceMaps(el: HTMLElement): Promise<SourceLocation | null> {
+  const hit = await resolveSourcemapHit(el);
+  if (!hit) return null;
+  return toSourceLocation(hit);
+}
+
+export async function resolveSourceLocation(el: HTMLElement): Promise<SourceLocation | null> {
+  return getSourceLocation(el) ?? await resolveViaSourceMaps(el);
 }
 
 // ── Bundler URL Stripping ──

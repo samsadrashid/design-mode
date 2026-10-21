@@ -3,6 +3,8 @@
 // Stores style/text/DOM changes, comments, and active sessions.
 // ============================================================
 
+import type { SourceLocation } from '@design-mode/shared';
+
 // Lifecycle a coding agent drives over MCP. Mirrors @design-mode/shared
 // ChangeStatus. Absent ⇒ 'todo'.
 export type ChangeStatus = 'todo' | 'in_progress' | 'resolved';
@@ -19,26 +21,33 @@ function viewportContext(change: ViewportContext): ViewportContext {
   };
 }
 
+// Present when the extension resolved file:line for the element
+// (framework dev hints or Source Map v3); omitted otherwise —
+// reports never carry null source locations.
+export interface SourcedChange {
+  sourceLocation?: SourceLocation;
+}
+
 export interface RouteMetadata {
   pageUrl?: string;
   routeKey?: string;
 }
 
-export interface StyleChange extends RouteMetadata, ViewportContext {
+export interface StyleChange extends RouteMetadata, ViewportContext, SourcedChange {
   id: string; elementId: string; selector: string;
   property: string; oldValue: string; newValue: string;
   timestamp: number;
   status?: ChangeStatus;
 }
 
-export interface TextChange extends RouteMetadata, ViewportContext {
+export interface TextChange extends RouteMetadata, ViewportContext, SourcedChange {
   id: string; elementId: string; selector: string;
   oldText: string; newText: string; timestamp: number;
   attributeName?: string;
   status?: ChangeStatus;
 }
 
-export interface DomChange extends RouteMetadata, ViewportContext {
+export interface DomChange extends RouteMetadata, ViewportContext, SourcedChange {
   id: string; elementId: string; selector: string;
   action: 'delete' | 'duplicate' | 'move' | 'insert';
   origin?: { parentSelector: string; index: number; parentId?: string };
@@ -232,7 +241,7 @@ class DesignModeState {
       const decls: string[] = [];
       for (const c of props.values()) {
         const kebab = toKebab(c.property);
-        changes.push({ ...this.routeMetadata(c), ...viewportContext(c), selector: c.selector, property: c.property, oldValue: c.oldValue, newValue: c.newValue, cssRule: `${c.selector} { ${kebab}: ${c.newValue}; }` });
+        changes.push({ ...this.routeMetadata(c), ...viewportContext(c), selector: c.selector, property: c.property, oldValue: c.oldValue, newValue: c.newValue, cssRule: `${c.selector} { ${kebab}: ${c.newValue}; }`, ...(c.sourceLocation ? { sourceLocation: c.sourceLocation } : {}) });
         decls.push(`  ${kebab}: ${c.newValue};`);
       }
       const key = this.routeKey(first);
@@ -262,8 +271,9 @@ class DesignModeState {
         newText: c.newText,
         ...(c.attributeName ? { attributeName: c.attributeName } : {}),
         ...viewportContext(c),
+        ...(c.sourceLocation ? { sourceLocation: c.sourceLocation } : {}),
       })),
-      domChanges: this.domChanges.map(c => ({ ...this.routeMetadata(c), selector: c.selector, action: c.action, tagName: c.tagName, origin: c.origin, destination: c.destination, ...viewportContext(c) })),
+      domChanges: this.domChanges.map(c => ({ ...this.routeMetadata(c), selector: c.selector, action: c.action, tagName: c.tagName, origin: c.origin, destination: c.destination, ...viewportContext(c), ...(c.sourceLocation ? { sourceLocation: c.sourceLocation } : {}) })),
       cssBlock: [...cssByRoute.values()].map(({ pageUrl, rules }) =>
         (pageUrl ? `/* Route: ${pageUrl.replace(/\*\//g, '* /')} */\n` : '') + rules.join('\n\n')
       ).join('\n\n'),
@@ -286,9 +296,9 @@ class DesignModeState {
       screenshot: `get_screenshot({ commentId: "${c.id}" })`,
     }));
     report.items = [
-      ...this.styleChanges.map(c => ({ ...this.routeMetadata(c), id: c.id, kind: 'style', selector: c.selector, property: c.property, status: c.status || 'todo' })),
-      ...this.textChanges.map(c => ({ ...this.routeMetadata(c), id: c.id, kind: 'text', selector: c.selector, status: c.status || 'todo' })),
-      ...this.domChanges.map(c => ({ ...this.routeMetadata(c), id: c.id, kind: 'dom', selector: c.selector, action: c.action, status: c.status || 'todo' })),
+      ...this.styleChanges.map(c => ({ ...this.routeMetadata(c), id: c.id, kind: 'style', selector: c.selector, property: c.property, status: c.status || 'todo', ...(c.sourceLocation ? { sourceLocation: c.sourceLocation } : {}) })),
+      ...this.textChanges.map(c => ({ ...this.routeMetadata(c), id: c.id, kind: 'text', selector: c.selector, status: c.status || 'todo', ...(c.sourceLocation ? { sourceLocation: c.sourceLocation } : {}) })),
+      ...this.domChanges.map(c => ({ ...this.routeMetadata(c), id: c.id, kind: 'dom', selector: c.selector, action: c.action, status: c.status || 'todo', ...(c.sourceLocation ? { sourceLocation: c.sourceLocation } : {}) })),
       ...this.getComments().map(c => ({ ...this.routeMetadata(c), id: c.id, kind: 'comment', selector: c.selector, status: c.resolved ? 'resolved' : 'todo' })),
     ];
     if (this.handoff) {
