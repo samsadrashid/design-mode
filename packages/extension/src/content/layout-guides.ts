@@ -13,6 +13,8 @@
 // which means a page reload (content script reloads) clears the
 // overlay but the side panel's session memory keeps its config.
 
+import { MANAGED_SHEET_ATTR } from '@shared/constants';
+
 interface LayoutGuideLayer {
   kind: 'grid' | 'columns' | 'rows';
   count: number;
@@ -35,9 +37,14 @@ let guideStyleEl: HTMLStyleElement | null = null;
 function ensureGuideStyleEl(): HTMLStyleElement {
   if (guideStyleEl && guideStyleEl.isConnected) return guideStyleEl;
   const existing = document.getElementById('dm-layout-guides') as HTMLStyleElement | null;
-  if (existing) { guideStyleEl = existing; return existing; }
+  if (existing) {
+    existing.setAttribute(MANAGED_SHEET_ATTR, '');
+    guideStyleEl = existing;
+    return existing;
+  }
   const el = document.createElement('style');
   el.id = 'dm-layout-guides';
+  el.setAttribute(MANAGED_SHEET_ATTR, '');
   (document.head || document.documentElement).appendChild(el);
   guideStyleEl = el;
   return el;

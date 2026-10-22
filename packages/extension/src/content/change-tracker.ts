@@ -4,6 +4,7 @@
 // ============================================================
 
 import { getElementById, generateSelector, describeElement, getComputedStyleSubset, reserveIdsAtLeast } from './helpers';
+import { MANAGED_SHEET_ATTR } from '@shared/constants';
 import { authoredTokenValueFor, bumpStyleGen } from './token-engine';
 import { DEFAULT_WS_PORT, DATA_ATTR, classifyBreakpoint, type Breakpoint } from '../shared';
 import { BUILTIN_KEYFRAMES } from './keyframes-library';
@@ -364,9 +365,15 @@ function buildOverlayCss(elementId: string, value: string): string {
 function ensureStyleEl(): HTMLStyleElement {
   if (appliedStyleEl && appliedStyleEl.isConnected) return appliedStyleEl;
   const existing = document.getElementById('dm-applied-styles') as HTMLStyleElement | null;
-  if (existing) { appliedStyleEl = existing; return existing; }
+  if (existing) {
+    // A sheet left by a previous injection already predates the marker.
+    existing.setAttribute(MANAGED_SHEET_ATTR, '');
+    appliedStyleEl = existing;
+    return existing;
+  }
   const el = document.createElement('style');
   el.id = 'dm-applied-styles';
+  el.setAttribute(MANAGED_SHEET_ATTR, '');
   (document.head || document.documentElement).appendChild(el);
   appliedStyleEl = el;
   return el;

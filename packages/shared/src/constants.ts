@@ -23,6 +23,11 @@ export const MCP_SERVER_NAME = 'design-mode';
 // Element data attribute for tracking
 export const DATA_ATTR = 'data-dm-id';
 
+// Owner marker on Design Mode's own managed <style> sheets. Extension-injected
+// rules shadow authored ones purely by injection order, so the sourcemap
+// resolver must never treat them as authored source.
+export const MANAGED_SHEET_ATTR = 'data-dm-managed-sheet';
+
 // Z-index layers for overlay elements
 export const Z_INDEX = {
   HOVER_OVERLAY: 2147483640,

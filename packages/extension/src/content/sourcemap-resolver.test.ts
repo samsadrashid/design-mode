@@ -9,6 +9,9 @@ import {
   resolveMapURL,
   joinSourceRoot,
   loadSourceMap,
+  isManagedSheet,
+  pickSourceRule,
+  resolveViaSourceMaps,
   type DecodedSourceMap,
 } from './sourcemap-resolver.ts';
 import { resolveSourceLocation, toSourceLocation } from './source-detection.ts';
@@ -310,5 +313,85 @@ describe('resolveSourceLocation', () => {
   it('returns null for hint-less elements outside a browser', async () => {
     const el = {} as HTMLElement;
     assert.equal(await resolveSourceLocation(el), null);
+  });
+});
+
+describe('managed-sheet skip', () => {
+  const fetchStub = (routes: Record<string, string>) => {
+    let mapFetches = 0;
+    const impl = (url: string) => {
+      const body = routes[url];
+      if (body === undefined) return Promise.reject(new Error(`unexpected fetch ${url}`));
+      if (url.endsWith('.map')) mapFetches++;
+      return Promise.resolve({
+        ok: true,
+        headers: { get: () => null },
+        text: () => Promise.resolve(body),
+      });
+    };
+    return { impl: impl as unknown as typeof fetch, mapFetches: () => mapFetches };
+  };
+
+  function authoredSheetFixture() {
+    return {
+      href: 'https://app.test/card.css',
+      ownerNode: { hasAttribute: () => false },
+      cssRules: [{
+        selectorText: '.card-hero',
+        style: { getPropertyValue: (name: string) => (name === 'color' ? 'seagreen' : '') },
+      }],
+    };
+  }
+
+  function managedSheetFixture() {
+    return {
+      href: null,
+      ownerNode: { hasAttribute: (name: string) => name === 'data-dm-managed-sheet', textContent: '/* Design Mode override rules */' },
+      cssRules: [{
+        selectorText: '[data-dm-id="dm-9"]',
+        style: { getPropertyValue: (name: string) => (name === 'color' ? 'seagreen' : '') },
+      },
+      {
+        selectorText: '[data-dm-id="dm-9"]',
+        style: { getPropertyValue: () => '' },
+      }],
+    };
+  }
+
+  it('pickSourceRule skips managed sheets so the authored declaring rule wins', () => {
+    const el = { matches: (sel: string) => sel === '.card-hero' || sel.startsWith('[data-dm-id') };
+    const hit = pickSourceRule([authoredSheetFixture(), managedSheetFixture()], el, 'color');
+    assert.ok(hit);
+    assert.equal(hit.rule.selectorText, '.card-hero');
+    assert.equal(hit.sheet.href, 'https://app.test/card.css');
+  });
+
+  it('resolves the authored rule end-to-end even when the managed sheet is last', async () => {
+    const { impl, mapFetches } = fetchStub({
+      'https://app.test/card.css': '.card-hero { color: seagreen; }\n/*# sourceMappingURL=card.css.map */',
+      'https://app.test/card.css.map': JSON.stringify({
+        version: 3,
+        sources: ['card.src.css'],
+        names: ['CardHero'],
+        mappings: buildMappings([[0, 0, 0, 4, 0, 0]]),
+      }),
+    });
+    const el = { matches: (sel: string) => sel === '.card-hero' || sel.startsWith('[data-dm-id') };
+    const oldDocument = globalThis.document;
+    try {
+      globalThis.document = { styleSheets: [authoredSheetFixture(), managedSheetFixture()] } as unknown as Document;
+      const hit = await resolveViaSourceMaps(el, { pageOrigin: 'https://app.test', fetchImpl: impl });
+      assert.deepEqual(hit, { file: 'card.src.css', line: 4, column: 0, component: 'CardHero' });
+      assert.ok(mapFetches() >= 1, 'the authored .map must actually be fetched');
+    } finally {
+      globalThis.document = oldDocument;
+    }
+  });
+
+  it('isManagedSheet reads the owner-node marker, not selector text', () => {
+    assert.equal(isManagedSheet({ ownerNode: { hasAttribute: (n: string) => n === 'data-dm-managed-sheet' } }), true);
+    assert.equal(isManagedSheet({ ownerNode: { hasAttribute: () => false } }), false);
+    assert.equal(isManagedSheet({ ownerNode: null }), false);
+    assert.equal(isManagedSheet({}), false);
   });
 });

@@ -5,7 +5,9 @@
 // ============================================================
 
 import type { SourceLocation, ComponentHierarchy } from '@shared/types';
+import { DATA_ATTR } from '@shared/constants';
 import { resolveViaSourceMaps as resolveSourcemapHit, type SourcemapHit } from './sourcemap-resolver';
+import { sanitizeFiberSource } from './page-fiber-source';
 
 // ── React Fiber Tree Walking ──
 
@@ -259,7 +261,33 @@ export async function resolveViaSourceMaps(el: HTMLElement): Promise<SourceLocat
 }
 
 export async function resolveSourceLocation(el: HTMLElement): Promise<SourceLocation | null> {
-  return getSourceLocation(el) ?? await resolveViaSourceMaps(el);
+  return await getSourceLocation(el)
+    ?? await mainWorldFiberSource(el)
+    ?? await resolveViaSourceMaps(el);
+}
+
+// React fiber expandos (__reactFiber$…) live in the page world and are
+// invisible from this isolated world, so the lookup hops through a
+// MAIN-world executeScript. Best-effort: any failure just yields null and
+// the sourcemap fallback runs next.
+async function mainWorldFiberSource(el: HTMLElement): Promise<SourceLocation | null> {
+  const id = el.getAttribute?.(DATA_ATTR);
+  if (!id) return null;
+  try {
+    const hit = sanitizeFiberSource(await browser.runtime.sendMessage({ type: 'GET_FIBER_SOURCE', elementId: id }));
+    if (!hit) return null;
+    return {
+      file: hit.file,
+      line: hit.line,
+      ...(hit.column !== undefined ? { column: hit.column } : {}),
+      ...(hit.component ? { component: hit.component } : {}),
+      framework: 'react',
+      bundlerUrl: hit.file,
+      cleanPath: cleanSourcePath(hit.file),
+    };
+  } catch {
+    return null;
+  }
 }
 
 // ── Bundler URL Stripping ──

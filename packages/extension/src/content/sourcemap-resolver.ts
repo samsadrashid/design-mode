@@ -5,6 +5,8 @@
 // path returns null — never throws into callers.
 // ============================================================
 
+import { MANAGED_SHEET_ATTR } from '@shared/constants';
+
 export const MAX_MAP_BYTES = 5 * 1024 * 1024;
 export const MAP_TIMEOUT_MS = 5000;
 
@@ -294,46 +296,74 @@ async function fetchResourceText(url: string, opts: LoadSourceMapOptions): Promi
 
 // ── DOM: element → matched CSS rule → original position ──
 
-function walkCssRules(list: CSSRuleList, fn: (rule: CSSRule) => void): void {
+// A sheet Design Mode injected itself (marked at creation) is never authored
+// source: its rules shadow the authored ones only because the extension
+// appends late, so reading them as source starves the resolver before any
+// .map fetch.
+export function isManagedSheet(sheet: { ownerNode?: unknown }): boolean {
+  const node = sheet.ownerNode as { hasAttribute?: (name: string) => boolean } | null | undefined;
+  return typeof node?.hasAttribute === 'function' && node.hasAttribute(MANAGED_SHEET_ATTR);
+}
+
+function walkCssRules(list: ArrayLike<unknown>, fn: (rule: unknown) => void): void {
   for (let i = 0; i < list.length; i++) {
     const rule = list[i];
     fn(rule);
-    const nested = (rule as { cssRules?: CSSRuleList }).cssRules;
+    const nested = (rule as { cssRules?: ArrayLike<unknown> }).cssRules;
     if (nested) walkCssRules(nested, fn);
   }
 }
 
 interface MatchedRule {
-  rule: CSSStyleRule;
-  sheet: CSSStyleSheet;
+  rule: { selectorText: string; style: { getPropertyValue(name: string): string } };
+  sheet: RuleSheet;
   matchIndex: number;
 }
 
-function lastMatchingRule(el: HTMLElement, property?: string): MatchedRule | null {
+interface RuleSheet {
+  ownerNode?: unknown;
+  href?: string | null;
+  cssRules: ArrayLike<unknown>;
+}
+
+export function pickSourceRule(
+  sheets: ArrayLike<RuleSheet>,
+  el: { matches(selector: string): boolean },
+  property?: string,
+): MatchedRule | null {
   let declaring: MatchedRule | null = null;
   let matching: MatchedRule | null = null;
-  for (const sheet of Array.from(document.styleSheets)) {
-    let rules: CSSRuleList;
+  for (let s = 0; s < sheets.length; s++) {
+    const sheet = sheets[s];
+    if (isManagedSheet(sheet)) continue;
+    let count = 0;
+    let rules: ArrayLike<unknown>;
     try {
       rules = sheet.cssRules;
     } catch {
       continue;
     }
-    let count = 0;
-    walkCssRules(rules, rule => {
-      if (!(rule instanceof CSSStyleRule)) return;
+    walkCssRules(rules, raw => {
+      const selector = (raw as { selectorText?: unknown }).selectorText;
+      if (typeof selector !== 'string') return;
+      const style = (raw as { style?: { getPropertyValue?: unknown } }).style;
+      if (typeof style?.getPropertyValue !== 'function') return;
       try {
-        if (!el.matches(rule.selectorText)) return;
+        if (!el.matches(selector)) return;
       } catch {
         return;
       }
       count++;
-      const hit = { rule, sheet, matchIndex: count - 1 };
+      const hit = { rule: { selectorText: selector, style: style as { getPropertyValue(name: string): string } }, sheet, matchIndex: count - 1 };
       matching = hit;
-      if (property && rule.style.getPropertyValue(property) !== '') declaring = hit;
+      if (property && (style as { getPropertyValue(name: string): string }).getPropertyValue(property) !== '') declaring = hit;
     });
   }
   return declaring ?? matching;
+}
+
+function lastMatchingRule(el: HTMLElement, property?: string): MatchedRule | null {
+  return pickSourceRule(document.styleSheets, el, property);
 }
 
 function locateSelector(text: string, selector: string, occurrence: number): number {
@@ -372,7 +402,7 @@ function lineColumnAt(text: string, offset: number): { line: number; column: num
   return { line, column: offset - lastNewline - 1 };
 }
 
-async function stylesheetText(sheet: CSSStyleSheet, opts: LoadSourceMapOptions): Promise<{ text: string; url: string | null } | null> {
+async function stylesheetText(sheet: RuleSheet, opts: LoadSourceMapOptions): Promise<{ text: string; url: string | null } | null> {
   const node = sheet.ownerNode as { textContent?: string } | null;
   if (!sheet.href) {
     const text = node?.textContent ?? '';

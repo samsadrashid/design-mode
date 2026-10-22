@@ -1,6 +1,8 @@
 // Inspect page :hover/:focus/:focus-visible/:active rules for an element.
 // CSSOM read-only — never mutates application classList, never reads :visited.
 
+import { MANAGED_SHEET_ATTR } from '@shared/constants';
+
 export const INSPECT_STATES = [':hover', ':focus-visible', ':focus', ':active'] as const;
 export type InspectState = (typeof INSPECT_STATES)[number];
 
@@ -174,6 +176,7 @@ export function setPageStateForceCss(css: string): void {
   if (!el) {
     el = document.createElement('style');
     el.id = PAGE_STATE_STYLE_ID;
+    el.setAttribute(MANAGED_SHEET_ATTR, '');
     (document.head || document.documentElement).appendChild(el);
   }
   el.textContent = css;
