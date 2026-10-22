@@ -23,8 +23,9 @@ export function readPageFiberSources(elementIds: string[]): Record<string, unkno
           : null;
         nearestNamed = named || nearestNamed;
         // _debugSource shadows type.__source: both report the JSX site, React's
-        // own record is the precise one. Lines are passed through verbatim —
-        // bundler preamble drift is React's report, not ours to correct.
+        // own record is the precise one. Lines pass through verbatim — they are
+        // bundler-intermediate positions; authored-position refinement happens
+        // later at resolveSourceLocation via the module's source map.
         const source = fiber._debugSource ?? (type && typeof type !== 'string' ? type.__source : null);
         if (source && typeof source.fileName === 'string') {
           sources[id] = {

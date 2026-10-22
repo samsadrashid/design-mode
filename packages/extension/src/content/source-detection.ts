@@ -6,7 +6,7 @@
 
 import type { SourceLocation, ComponentHierarchy } from '@shared/types';
 import { DATA_ATTR } from '@shared/constants';
-import { resolveViaSourceMaps as resolveSourcemapHit, type SourcemapHit } from './sourcemap-resolver';
+import { resolveViaSourceMaps as resolveSourcemapHit, refineReactSourcePosition, type SourcemapHit } from './sourcemap-resolver';
 import { sanitizeFiberSource } from './page-fiber-source';
 
 // ── React Fiber Tree Walking ──
@@ -261,9 +261,87 @@ export async function resolveViaSourceMaps(el: HTMLElement): Promise<SourceLocat
 }
 
 export async function resolveSourceLocation(el: HTMLElement): Promise<SourceLocation | null> {
-  return await getSourceLocation(el)
-    ?? await mainWorldFiberSource(el)
-    ?? await resolveViaSourceMaps(el);
+  const direct = await getSourceLocation(el)
+    ?? await mainWorldFiberSource(el);
+  if (direct) return await refineReactLine(direct);
+  return await resolveViaSourceMaps(el);
+}
+
+// ── React Dev Report Refinement ──
+
+// React dev-only _debugSource lines are positions inside the bundler's
+// intermediate module (the react-refresh preamble shifts every JSX line past
+// where the authored file ends). When the served module publishes a source
+// map, refine the report to the authored position; if anything is missing,
+// keep the raw report — never a guessed correction.
+async function refineReactLine(hit: SourceLocation): Promise<SourceLocation> {
+  if (hit.framework !== 'react' || typeof hit.line !== 'number' || !hit.file || hit.file === 'unknown') return hit;
+  try {
+    const pageOrigin = typeof location !== 'undefined' ? location.origin : undefined;
+    const moduleUrl = findSameOriginModuleUrl(hit.file, pageOrigin);
+    if (!moduleUrl) return hit;
+    const pos = await refineReactSourcePosition(
+      { file: hit.file, line: hit.line, ...(hit.column != null ? { column: hit.column } : {}) },
+      { moduleUrl, pageOrigin },
+    );
+    if (!pos) return hit;
+    // The mapped source must be the reported file; otherwise the module's
+    // map describes a different unit and the refinement would misattribute.
+    const mapped = cleanSourcePath(pos.file).replace(/^\/+/, '');
+    const reported = cleanSourcePath(hit.file).replace(/^\/+/, '');
+    if (!mapped || (!reported.endsWith(mapped) && !mapped.endsWith(reported))) return hit;
+    return {
+      ...hit,
+      line: pos.line + 1,
+      column: pos.column + 1,
+    };
+  } catch {
+    return hit;
+  }
+}
+
+// Locate the served module URL for an absolute authored path reported by a
+// framework, using only resources the page itself loaded. Cross-origin and
+// non-http candidates are dropped: the reported path is page-supplied and
+// must never pick a fetch target by itself.
+export function findSameOriginModuleUrl(reportedFile: string, pageOrigin?: string): string | null {
+  const origin = pageOrigin ?? (typeof location !== 'undefined' ? location.origin : undefined);
+  if (!origin || !reportedFile || /[\r\n\u0000-\u001f]/.test(reportedFile)) return null;
+  const reported = reportedFile.replace(/\\/g, '/');
+  let best: string | null = null;
+  let bestLen = -1;
+  const consider = (raw: unknown) => {
+    if (typeof raw !== 'string' || !raw) return;
+    let url: URL;
+    try {
+      url = new URL(raw);
+    } catch {
+      return;
+    }
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return;
+    if (url.origin !== origin) return;
+    let path = url.pathname;
+    try {
+      path = decodeURIComponent(path);
+    } catch { /* keep the raw pathname */ }
+    if (path === '/') return;
+    const fsPath = path.replace(/^\/@fs/, '');
+    if (!reported.endsWith(path) && !fsPath.endsWith(reported)) return;
+    if (path.length <= bestLen) return;
+    best = url.toString();
+    bestLen = path.length;
+  };
+  if (typeof performance !== 'undefined') {
+    for (const entry of performance.getEntriesByType?.('resource') ?? []) {
+      consider(entry.name);
+    }
+  }
+  if (typeof document !== 'undefined') {
+    for (const script of Array.from(document.querySelectorAll('script[src]'))) {
+      consider(script.getAttribute('src'));
+    }
+  }
+  return best;
 }
 
 // React fiber expandos (__reactFiber$…) live in the page world and are

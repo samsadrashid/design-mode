@@ -12,6 +12,8 @@ import {
   isManagedSheet,
   pickSourceRule,
   resolveViaSourceMaps,
+  findSourceObjectOffset,
+  refineReactSourcePosition,
   type DecodedSourceMap,
 } from './sourcemap-resolver.ts';
 import { resolveSourceLocation, toSourceLocation } from './source-detection.ts';
@@ -393,5 +395,135 @@ describe('managed-sheet skip', () => {
     assert.equal(isManagedSheet({ ownerNode: { hasAttribute: () => false } }), false);
     assert.equal(isManagedSheet({ ownerNode: null }), false);
     assert.equal(isManagedSheet({}), false);
+  });
+});
+
+// ── React dev source refinement ──
+//
+// Vite + @vitejs/plugin-react bakes each JSX element's position in the
+// refresh-wrapped intermediate module into a { fileName, lineNumber,
+// columnNumber } literal, and React's _debugSource reports that intermediate
+// position verbatim. This fixture mirrors the served shape: the button's
+// literal sits at generated line 27 (1-based) while the authored button is at
+// Card.jsx line 8, and the inline map carries generated lines 25–29 back to
+// authored (8,7), generated lines 20–24 back to authored (7,7).
+const CARD_FILE = '/proj/src/Card.jsx';
+
+function inlineMapURI(entries: number[][], sources: string[] = ['Card.jsx']): string {
+  const map = { version: 3, sources, names: [] as string[], mappings: buildMappings(entries) };
+  return 'data:application/json;base64,' + Buffer.from(JSON.stringify(map)).toString('base64');
+}
+
+function servedCardModule(opts: { withMap: boolean }): string {
+  const body = [
+    'import { jsxDEV } from "react/jsx-dev-runtime";',
+    ...Array.from({ length: 18 }, () => '// filler'),
+    '    /* @__PURE__ */ jsxDEV("h1", { id: "card-title", children: "Card" }, void 0, false, {',
+    `      fileName: "${CARD_FILE}",`,
+    '      lineNumber: 26,',
+    '      columnNumber: 7',
+    '    }, this),',
+    '    /* @__PURE__ */ jsxDEV("button", { id: "target-btn" }, void 0, false, {',
+    `      fileName: "${CARD_FILE}",`,
+    '      lineNumber: 27,',
+    '      columnNumber: 7',
+    '    }, this);',
+  ];
+  if (opts.withMap) {
+    body.push('//# sourceMappingURL=' + inlineMapURI([
+      [19, 0, 0, 6, 6],
+      [20, 0, 0, 6, 6],
+      [21, 0, 0, 6, 6],
+      [22, 0, 0, 6, 6],
+      [23, 0, 0, 6, 6],
+      [24, 4, 0, 7, 6],
+      [25, 0, 0, 7, 6],
+      [26, 0, 0, 7, 6],
+      [27, 0, 0, 7, 6],
+      [28, 0, 0, 7, 6],
+    ]));
+  }
+  return body.join('\n') + '\n';
+}
+
+function routeFetch(routes: Record<string, string>) {
+  return (url: string) => {
+    const body = routes[url];
+    if (body === undefined) return Promise.reject(new Error(`unexpected fetch ${url}`));
+    return Promise.resolve({
+      ok: true,
+      headers: { get: () => null },
+      text: () => Promise.resolve(body),
+    });
+  };
+}
+
+describe('findSourceObjectOffset', () => {
+  const text = servedCardModule({ withMap: false });
+
+  it('finds the literal whose fileName, line, and column all match', () => {
+    const expected = text.indexOf('lineNumber: 27');
+    assert.ok(expected > 0);
+    assert.equal(findSourceObjectOffset(text, CARD_FILE, 27, 7), expected);
+  });
+
+  it('matches the compact no-space form emitted by some transforms', () => {
+    const compact = '{ fileName: "a.jsx", lineNumber:12, columnNumber: 3 }';
+    assert.equal(findSourceObjectOffset(compact, 'a.jsx', 12, 3), compact.indexOf('lineNumber:12'));
+  });
+
+  it('rejects prefix hits (27 inside 271) and keeps scanning', () => {
+    const withPrefix = [
+      `{ fileName: "${CARD_FILE}", lineNumber: 271, columnNumber: 7 },`,
+      `{ fileName: "${CARD_FILE}", lineNumber: 27, columnNumber: 7 },`,
+    ].join('\n');
+    assert.equal(findSourceObjectOffset(withPrefix, CARD_FILE, 27, 7), withPrefix.lastIndexOf('lineNumber: 27'));
+  });
+
+  it('returns -1 when the file, column, or literal is absent', () => {
+    assert.equal(findSourceObjectOffset(text, '/proj/src/Other.jsx', 27, 7), -1);
+    assert.equal(findSourceObjectOffset(text, CARD_FILE, 27, 9), -1);
+    assert.equal(findSourceObjectOffset('const x = 1;', CARD_FILE, 27, 7), -1);
+  });
+});
+
+describe('refineReactSourcePosition', () => {
+  const routes = { 'https://app.test/src/Card.jsx': servedCardModule({ withMap: true }) };
+  const opts = {
+    pageOrigin: 'https://app.test',
+    moduleUrl: 'https://app.test/src/Card.jsx',
+    fetchImpl: routeFetch(routes),
+  };
+
+  it('maps the intermediate line-27 report to authored line 8', async () => {
+    const hit = await refineReactSourcePosition({ file: CARD_FILE, line: 27, column: 7 }, opts);
+    assert.deepEqual(hit, { file: 'Card.jsx', line: 7, column: 6 });
+  });
+
+  it('maps the h1 report to authored line 7, not the button line', async () => {
+    const hit = await refineReactSourcePosition({ file: CARD_FILE, line: 26, column: 7 }, opts);
+    assert.deepEqual(hit, { file: 'Card.jsx', line: 6, column: 6 });
+  });
+
+  it('returns null when the module has no sourceMappingURL', async () => {
+    const hit = await refineReactSourcePosition(
+      { file: CARD_FILE, line: 27, column: 7 },
+      {
+        pageOrigin: 'https://app.test',
+        moduleUrl: 'https://app.test/src/Plain.jsx',
+        fetchImpl: routeFetch({ 'https://app.test/src/Plain.jsx': servedCardModule({ withMap: false }) }),
+      },
+    );
+    assert.equal(hit, null);
+  });
+
+  it('returns null without a module URL or on cross-origin URLs', async () => {
+    assert.equal(await refineReactSourcePosition({ file: CARD_FILE, line: 27 }, { ...opts, moduleUrl: null }), null);
+    assert.equal(await refineReactSourcePosition({ file: CARD_FILE, line: 27 }, { ...opts, moduleUrl: undefined }), null);
+    const hit = await refineReactSourcePosition(
+      { file: CARD_FILE, line: 27, column: 7 },
+      { ...opts, moduleUrl: 'https://evil.test/src/Card.jsx' },
+    );
+    assert.equal(hit, null);
   });
 });

@@ -1,7 +1,9 @@
 // ============================================================
 // Source Map v3 resolution: base64 VLQ decoding, generated →
 // original position lookup, and loading of .map payloads from
-// same-origin resources or inline data: URIs. Every failure
+// same-origin resources or inline data: URIs. Also refines React
+// dev _debugSource reports, which are positions in the bundler's
+// intermediate module, not the authored file. Every failure
 // path returns null — never throws into callers.
 // ============================================================
 
@@ -277,7 +279,7 @@ export async function loadSourceMap(mapRef: string, opts: LoadSourceMapOptions =
   }
 }
 
-async function fetchResourceText(url: string, opts: LoadSourceMapOptions): Promise<string | null> {
+export async function fetchResourceText(url: string, opts: LoadSourceMapOptions): Promise<string | null> {
   try {
     const parsed = new URL(url);
     if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null;
@@ -289,6 +291,93 @@ async function fetchResourceText(url: string, opts: LoadSourceMapOptions): Promi
     const text = res.ok ? await readCapped(res, opts.maxBytes ?? MAX_MAP_BYTES) : null;
     resourceTextCache.set(url, text);
     return text;
+  } catch {
+    return null;
+  }
+}
+
+// ── React dev source refinement ──
+
+// Dev-mode JSX transforms (esbuild jsxDev, babel jsx-development) bake each
+// element's intermediate position into its jsxDEV call as a trailing
+// { fileName, lineNumber, columnNumber } literal. React's _debugSource
+// reports that intermediate position verbatim, so the literal — not the
+// reported position — is the reliable key for finding the generated position
+// to map back to the authored file. Plain string search only: the reported
+// values are page-supplied and must never become a RegExp.
+export function findSourceObjectOffset(
+  text: string,
+  file: string,
+  line: number,
+  column?: number,
+): number {
+  if (!file || !Number.isSafeInteger(line) || line < 0) return -1;
+  for (const needle of [`lineNumber: ${line}`, `lineNumber:${line}`]) {
+    let from = 0;
+    for (let idx = text.indexOf(needle, from); idx >= 0; idx = text.indexOf(needle, from)) {
+      from = idx + needle.length;
+      const after = text.charCodeAt(from);
+      if (after >= 48 && after <= 57) continue; // prefix hit: 27 inside 271
+      if (!sourceObjectMatchesFile(text, idx, file)) continue;
+      if (column != null && !sourceObjectMatchesColumn(text, from, column)) continue;
+      return idx;
+    }
+  }
+  return -1;
+}
+
+function sourceObjectMatchesFile(text: string, idx: number, file: string): boolean {
+  const anchor = text.lastIndexOf('fileName', idx);
+  if (anchor < 0 || idx - anchor > 500) return false;
+  const colon = text.indexOf(':', anchor);
+  if (colon < 0 || colon > idx) return false;
+  let i = colon + 1;
+  while (i < idx && (text[i] === ' ' || text[i] === '\t')) i++;
+  const quote = text[i];
+  if (quote !== '"' && quote !== "'") return false;
+  const end = text.indexOf(quote, i + 1);
+  if (end < 0 || end > idx) return false;
+  const value = text.slice(i + 1, end);
+  return value === file || value.endsWith(file) || file.endsWith(value);
+}
+
+function sourceObjectMatchesColumn(text: string, from: number, column: number): boolean {
+  const tail = text.slice(from, from + 80);
+  const anchor = tail.indexOf('columnNumber');
+  if (anchor < 0) return false;
+  const colon = tail.indexOf(':', anchor);
+  if (colon < 0) return false;
+  const digits = /^\s*(\d+)/.exec(tail.slice(colon + 1));
+  return digits !== null && Number(digits[1]) === column;
+}
+
+// React dev builds report _debugSource positions from the bundler's
+// intermediate module (react-refresh preamble etc.), so the authored line is
+// not recoverable from the report alone. When the served module publishes a
+// source map, the intermediate position lives on as the baked literal above;
+// locate it, treat its location as the generated position, and map it to the
+// authored one. Returns null whenever any step is unavailable — the caller
+// keeps React's raw report rather than a guessed correction.
+export async function refineReactSourcePosition(
+  reported: { file: string; line: number; column?: number },
+  opts: LoadSourceMapOptions & { moduleUrl?: string | null } = {},
+): Promise<SourcemapHit | null> {
+  try {
+    const moduleUrl = opts.moduleUrl;
+    if (!moduleUrl) return null;
+    const pageOrigin = opts.pageOrigin ?? (typeof location !== 'undefined' ? location.origin : undefined);
+    const text = await fetchResourceText(moduleUrl, { ...opts, pageOrigin });
+    if (text === null) return null;
+    const target = parseSourceMappingURL(text);
+    if (!target) return null;
+    const mapRef = resolveMapURL(target, moduleUrl);
+    if (!mapRef) return null;
+    const map = await loadSourceMap(mapRef, { ...opts, pageOrigin });
+    if (!map) return null;
+    const idx = findSourceObjectOffset(text, reported.file, reported.line, reported.column);
+    if (idx < 0) return null;
+    const { line, column } = lineColumnAt(text, idx);
+    return originalPositionFor(map, line, column);
   } catch {
     return null;
   }
