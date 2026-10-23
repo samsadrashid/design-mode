@@ -282,6 +282,7 @@ describe('resolveSourceLocation react refinement', () => {
   }
 
   it('refines the line-27 fiber report to the authored line 8 via the served module map', async () => {
+    applySourcemapFetchValue(true);
     const stub = withMainFiberHit();
     const fetchCalls: string[] = [];
     const env = withEnvironment({
@@ -307,6 +308,7 @@ describe('resolveSourceLocation react refinement', () => {
   });
 
   it('keeps the raw intermediate report when the module has no source map', async () => {
+    applySourcemapFetchValue(true);
     const stub = withMainFiberHit();
     const env = withEnvironment({
       origin: 'https://plain.test',
@@ -332,6 +334,7 @@ describe('resolveSourceLocation react refinement', () => {
   });
 
   it('keeps the raw report and fetches nothing when no same-origin module is loaded', async () => {
+    applySourcemapFetchValue(true);
     const stub = withMainFiberHit();
     const fetchCalls: string[] = [];
     const env = withEnvironment({
@@ -440,6 +443,7 @@ describe('sourcemap fetch setting gates network resolution', () => {
   });
 
   it('a same-origin stylesheet falls back through the map when the setting is on', async () => {
+    applySourcemapFetchValue(true);
     const cssUrl = 'https://on.test/card.css';
     const mapUrl = 'https://on.test/card.css.map';
     const fetchCalls: string[] = [];

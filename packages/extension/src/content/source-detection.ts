@@ -8,7 +8,7 @@ import type { SourceLocation, ComponentHierarchy } from '@shared/types';
 import { DATA_ATTR } from '@shared/constants';
 import { resolveViaSourceMaps as resolveSourcemapHit, refineReactSourcePosition, type SourcemapHit } from './sourcemap-resolver';
 import { sanitizeFiberSource } from './page-fiber-source';
-import { sourcemapFetchEnabled } from './sourcemap-fetch-setting';
+import { whenSourcemapFetchSettingKnown } from './sourcemap-fetch-setting';
 
 // ── React Fiber Tree Walking ──
 
@@ -256,7 +256,9 @@ export function toSourceLocation(hit: SourcemapHit): SourceLocation {
 }
 
 export async function resolveViaSourceMaps(el: HTMLElement): Promise<SourceLocation | null> {
-  if (!sourcemapFetchEnabled()) return null;
+  // Wait for the saved setting before deciding: no fetch may start on the
+  // load-time guess that the gate is on.
+  if (!(await whenSourcemapFetchSettingKnown())) return null;
   const hit = await resolveSourcemapHit(el);
   if (!hit) return null;
   return toSourceLocation(hit);
@@ -278,7 +280,9 @@ export async function resolveSourceLocation(el: HTMLElement): Promise<SourceLoca
 // keep the raw report — never a guessed correction.
 async function refineReactLine(hit: SourceLocation): Promise<SourceLocation> {
   if (hit.framework !== 'react' || typeof hit.line !== 'number' || !hit.file || hit.file === 'unknown') return hit;
-  if (!sourcemapFetchEnabled()) return hit;
+  // Same readiness gate as the CSS path: the first refinement after load
+  // must wait for the saved setting too.
+  if (!(await whenSourcemapFetchSettingKnown())) return hit;
   try {
     const pageOrigin = typeof location !== 'undefined' ? location.origin : undefined;
     const moduleUrl = findSameOriginModuleUrl(hit.file, pageOrigin);

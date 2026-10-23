@@ -113,6 +113,9 @@ This is controlled by the `dm-sourcemap-fetch` setting in
 `chrome.storage.local`. Turn it off in **Settings → Source maps → Off**. With
 it off the extension makes zero source-map requests; framework hints keep
 working and React reports keep their raw (bundler-intermediate) line numbers.
+Until the saved value has been read — and if the read fails — the extension
+treats the gate as off and fetches nothing, so a request never runs on the
+load-time default.
 
 Configured Cloud or Self-hosted mode:
 
