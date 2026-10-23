@@ -9,6 +9,7 @@ import {
   resolveMapURL,
   joinSourceRoot,
   loadSourceMap,
+  fetchResourceText,
   isManagedSheet,
   pickSourceRule,
   resolveViaSourceMaps,
@@ -579,5 +580,63 @@ describe('refineReactSourcePosition', () => {
       { ...opts, moduleUrl: 'https://evil.test/src/Card.jsx' },
     );
     assert.equal(hit, null);
+  });
+});
+
+// ── Per-URL cache bounds ──
+//
+// Unique hosts per describe keep these fills from disturbing the caches the
+// earlier suites rely on.
+
+describe('resource text cache bounds', () => {
+  const textOpts = (impl: typeof fetch) => ({ pageOrigin: 'https://lru-text.test', fetchImpl: impl });
+  const url = (n: number) => `https://lru-text.test/r${n}`;
+
+  it('caps at 32 entries, evicts least-recently-used, and refreshes on hit', async () => {
+    const calls: Record<string, number> = {};
+    const impl = ((url: string) => {
+      calls[url] = (calls[url] ?? 0) + 1;
+      return Promise.resolve({ ok: true, headers: { get: () => null }, text: () => Promise.resolve(`body:${url}`) });
+    }) as unknown as typeof fetch;
+    for (let n = 0; n < 32; n++) await fetchResourceText(url(n), textOpts(impl));
+    await fetchResourceText(url(0), textOpts(impl)); // hit — refreshes 0 to most-recent
+    assert.equal(calls[url(0)], 1);
+    await fetchResourceText(url(32), textOpts(impl)); // cap exceeded — evicts r1, the LRU
+    await fetchResourceText(url(0), textOpts(impl));
+    assert.equal(calls[url(0)], 1, 'recently-used entry survives eviction');
+    await fetchResourceText(url(1), textOpts(impl));
+    assert.equal(calls[url(1)], 2, 'least-recently-used entry was evicted');
+    assert.equal(Object.values(calls).reduce((a, b) => a + b, 0), 34);
+  });
+
+  it('caches misses under the same cap', async () => {
+    const impl = ((url: string) => Promise.resolve({
+      ok: false,
+      headers: { get: () => null },
+      text: () => Promise.resolve(''),
+    })) as unknown as typeof fetch;
+    const first = await fetchResourceText(url(100), textOpts(impl));
+    const second = await fetchResourceText(url(100), textOpts(impl));
+    assert.equal(first, null);
+    assert.equal(second, null);
+  });
+});
+
+describe('source map cache bounds', () => {
+  it('caps at 32 entries and re-fetches the evicted entry', async () => {
+    const calls: Record<string, number> = {};
+    const impl = ((url: string) => {
+      calls[url] = (calls[url] ?? 0) + 1;
+      const json = JSON.stringify({ version: 3, sources: ['a.tsx'], names: [], mappings: buildMappings([[0, 0, 0, 0, 0]]) });
+      return Promise.resolve({ ok: true, headers: { get: () => null }, text: () => Promise.resolve(json) });
+    }) as unknown as typeof fetch;
+    const mapOpts = { pageOrigin: 'https://lru-map.test', fetchImpl: impl };
+    const murl = (n: number) => `https://lru-map.test/m${n}.map`;
+    for (let n = 0; n < 33; n++) await loadSourceMap(murl(n), mapOpts);
+    assert.equal(Object.keys(calls).length, 33);
+    await loadSourceMap(murl(0), mapOpts);
+    assert.equal(calls[murl(0)], 2, 'oldest entry was evicted when the cap was hit');
+    await loadSourceMap(murl(32), mapOpts);
+    assert.equal(calls[murl(32)], 1, 'most-recent entry survives');
   });
 });

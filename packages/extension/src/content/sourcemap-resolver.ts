@@ -57,8 +57,37 @@ export interface LoadSourceMapOptions {
   maxBytes?: number;
 }
 
-const resourceTextCache = new Map<string, string | null>();
-const mapCache = new Map<string, DecodedSourceMap | null>();
+// Tabs live long and resolve many resources; the per-URL caches are capped
+// and refresh-on-hit so a hot resource is never evicted by scan volume.
+const CACHE_MAX_ENTRIES = 32;
+
+class LruCache<T> {
+  private entries = new Map<string, T>();
+
+  constructor(private readonly max: number) {}
+
+  get(key: string): T | undefined {
+    const value = this.entries.get(key);
+    if (value !== undefined) {
+      this.entries.delete(key);
+      this.entries.set(key, value);
+    }
+    return value;
+  }
+
+  set(key: string, value: T): void {
+    this.entries.delete(key);
+    this.entries.set(key, value);
+    while (this.entries.size > this.max) {
+      const oldest = this.entries.keys().next().value;
+      if (oldest === undefined) break;
+      this.entries.delete(oldest);
+    }
+  }
+}
+
+const resourceTextCache = new LruCache<string | null>(CACHE_MAX_ENTRIES);
+const mapCache = new LruCache<DecodedSourceMap | null>(CACHE_MAX_ENTRIES);
 
 // ── VLQ + decoding ──
 
