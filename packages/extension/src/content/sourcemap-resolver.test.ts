@@ -505,6 +505,60 @@ describe('refineReactSourcePosition', () => {
     assert.deepEqual(hit, { file: 'Card.jsx', line: 6, column: 6 });
   });
 
+  // Real esbuild jsxDev maps the baked literal's whole generated line back to
+  // the element's authored position — including its authored column — so two
+  // elements indented differently refine to different columns (verified
+  // against the e2e fixture's own esbuild: section (3,5), button (4,7)).
+  function servedTwoColumnModule(): string {
+    const body = [
+      'import { jsxDEV } from "react/jsx-dev-runtime";',
+      ...Array.from({ length: 18 }, () => '// filler'),
+      '    /* @__PURE__ */ jsxDEV("button", { id: "widget-btn" }, void 0, false, {',
+      `      fileName: "${CARD_FILE}",`,
+      '      lineNumber: 4,',
+      '      columnNumber: 7',
+      '    }, this);',
+      '    /* @__PURE__ */ jsxDEV("section", { id: "widget-root" }, void 0, false, {',
+      `      fileName: "${CARD_FILE}",`,
+      '      lineNumber: 3,',
+      '      columnNumber: 5',
+      '    }, this);',
+      '//# sourceMappingURL=' + inlineMapURI([
+        [21, 0, 0, 3, 6], // button literal's line → authored (1-based) (4,7)
+        [26, 0, 0, 2, 4], // section literal's line → authored (1-based) (3,5)
+      ]),
+    ];
+    return body.join('\n') + '\n';
+  }
+
+  it('refines each literal to its own authored line and column, not a shared one', async () => {
+    const twoColOpts = {
+      pageOrigin: 'https://twocol.test',
+      moduleUrl: 'https://twocol.test/src/Card.jsx',
+      fetchImpl: routeFetch({ 'https://twocol.test/src/Card.jsx': servedTwoColumnModule() }),
+    };
+    const button = await refineReactSourcePosition({ file: CARD_FILE, line: 4, column: 7 }, twoColOpts);
+    assert.deepEqual(button, { file: 'Card.jsx', line: 3, column: 6 });
+    const section = await refineReactSourcePosition({ file: CARD_FILE, line: 3, column: 5 }, twoColOpts);
+    assert.deepEqual(section, { file: 'Card.jsx', line: 2, column: 4 });
+    assert.notEqual(button?.column, section?.column);
+  });
+
+  it('returns null when the module map payload is malformed', async () => {
+    const bad = 'data:application/json;base64,' + Buffer.from('not json at all').toString('base64');
+    const hit = await refineReactSourcePosition(
+      { file: CARD_FILE, line: 27, column: 7 },
+      {
+        pageOrigin: 'https://badmap.test',
+        moduleUrl: 'https://badmap.test/src/Card.jsx',
+        fetchImpl: routeFetch({
+          'https://badmap.test/src/Card.jsx': servedCardModule({ withMap: false }) + '//# sourceMappingURL=' + bad + '\n',
+        }),
+      },
+    );
+    assert.equal(hit, null);
+  });
+
   it('returns null when the module has no sourceMappingURL', async () => {
     const hit = await refineReactSourcePosition(
       { file: CARD_FILE, line: 27, column: 7 },
