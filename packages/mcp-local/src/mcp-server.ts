@@ -51,7 +51,7 @@ export function createMcpServer(dispatch: ToolDispatch = executeLocalTool): McpS
 
   server.tool(
     'get_session_summary',
-    'Connection status, active sessions, and counts. Use this for a quick health check before calling apply_changes.',
+    'Connection status, active sessions, and counts. Counts are live tracked records — get_changes consolidates style rows per selector+property and shows routeGroups as per-route views, so its row counts can differ from these totals. Use this for a quick health check before calling apply_changes.',
     async () => dispatch('get_session_summary')
   );
 
