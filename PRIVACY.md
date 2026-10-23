@@ -22,7 +22,7 @@ Editor data and preferences live on **your machine**, in the browser's extension
 
 | Storage area              | What's there                                                                        | Lifetime                       |
 | ------------------------- | ----------------------------------------------------------------------------------- | ------------------------------ |
-| `chrome.storage.local`    | UI preferences and installation analytics ID: `dm-analytics-distinct-id` (persistent random UUID for usage analytics), `dm-theme`, `dm-color-format`, `dm-capture-mode`, active Tokens-panel tab (`dm-tokens-tab`), inspector overlay colours (`dm-inspector-hover-color`, `dm-inspector-select-color`, `dm-overlay-margin-color`, `dm-overlay-padding-color`), contrast-checker settings (`dm-a11y-category`, `dm-a11y-level`), nudge-amount (`dm-nudge-amount`), page-cursor toggle (`dm-custom-cursor`), Chrome launch surface (`dm-launch-surface`: `side-panel` / `floating` / `picture-in-picture`), pop-out window bounds (`dm-popout-bounds`), pinned PiP window size + support flag (`dm-pip-size`, `dm-pip-unsupported`) | Until you uninstall the ext.   |
+| `chrome.storage.local`    | UI preferences and installation analytics ID: `dm-analytics-distinct-id` (persistent random UUID for usage analytics), `dm-theme`, `dm-color-format`, `dm-capture-mode`, active Tokens-panel tab (`dm-tokens-tab`), inspector overlay colours (`dm-inspector-hover-color`, `dm-inspector-select-color`, `dm-overlay-margin-color`, `dm-overlay-padding-color`), contrast-checker settings (`dm-a11y-category`, `dm-a11y-level`), nudge-amount (`dm-nudge-amount`), page-cursor toggle (`dm-custom-cursor`), source-map fetch gate (`dm-sourcemap-fetch`), Chrome launch surface (`dm-launch-surface`: `side-panel` / `floating` / `picture-in-picture`), pop-out window bounds (`dm-popout-bounds`), pinned PiP window size + support flag (`dm-pip-size`, `dm-pip-unsupported`) | Until you uninstall the ext.   |
 | `chrome.storage.sync`     | User-saved presets you opt to sync across devices                                   | Synced via your browser's sync account (Chrome Sync / Firefox Sync) |
 | `chrome.storage.session`  | Per-page edit sessions (style/text/DOM changes), keyed by `origin + path + search`  | Until tab/browser closes       |
 
@@ -88,6 +88,34 @@ Local browser operations:
 - `fetch(media.src)` when you click "Download" on an inspected `<img>` /
   `<video>` / `<audio>` / SVG — this is a normal browser request to whatever
   URL the page already references; nothing is added by the extension.
+
+### Source-map resolution (on by default)
+
+After you record a change, the extension tries to attach a source location
+(file, line, component) to the change so your coding agent can open the right
+file. Framework hints (React/Vue/Svelte/Angular metadata already on the page)
+are read locally. When those are unavailable, the extension fetches, from the
+inspected page's own origin only:
+
+- the page's own stylesheet or script text for the resource that styles the
+  edited element, and
+- the source map that resource declares (`.map` files, or inline `data:`
+  source maps), when it publishes one.
+
+Each file is capped at 5 MB and 5 seconds, and cross-origin resources are
+never requested. The fetched text is parsed locally; the resolved location
+stays on your machine until you send change reports over an MCP transport you
+configured — including Cloud mode, where `get_changes` responses (with
+`sourceLocation` fields) pass through the relay described above. No other
+service receives them.
+
+This is controlled by the `dm-sourcemap-fetch` setting in
+`chrome.storage.local`. Turn it off in **Settings → Source maps → Off**. With
+it off the extension makes zero source-map requests; framework hints keep
+working and React reports keep their raw (bundler-intermediate) line numbers.
+Until the saved value has been read — and if the read fails — the extension
+treats the gate as off and fetches nothing, so a request never runs on the
+load-time default.
 
 Configured Cloud or Self-hosted mode:
 
