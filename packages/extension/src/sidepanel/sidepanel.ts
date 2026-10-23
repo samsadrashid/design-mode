@@ -644,6 +644,10 @@ let nudgeAmount = 10;
 // App-icon cursor on the inspected page while the panel is open. The
 // content script reads the same key via browser.storage.onChanged.
 let customCursor = true;
+// Whether change source-location resolution may fetch same-origin
+// scripts/stylesheets and .map files. The content script reads the same
+// key via browser.storage.onChanged.
+let sourcemapFetch = true;
 let launchSurface: LaunchSurface = DEFAULT_LAUNCH_SURFACE;
 let inspectorError = '';
 let inspectorEpoch = 0;
@@ -658,6 +662,7 @@ browser.storage?.local?.get?.([
   'dm-input-unit',
   'dm-nudge-amount',
   'dm-custom-cursor',
+  'dm-sourcemap-fetch',
   'dm-a11y-category', 'dm-a11y-level',
   'dm-pip-size', 'dm-pip-unsupported',
   LAUNCH_SURFACE_KEY,
@@ -679,6 +684,7 @@ browser.storage?.local?.get?.([
   if (result?.['dm-input-unit'] === 'rem' || result?.['dm-input-unit'] === 'px') inputUnit = result['dm-input-unit'];
   if (typeof result?.['dm-nudge-amount'] === 'number' && result['dm-nudge-amount'] > 0) nudgeAmount = result['dm-nudge-amount'];
   if (typeof result?.['dm-custom-cursor'] === 'boolean') customCursor = result['dm-custom-cursor'];
+  if (typeof result?.['dm-sourcemap-fetch'] === 'boolean') sourcemapFetch = result['dm-sourcemap-fetch'];
   const cat = result?.['dm-a11y-category'];
   if (cat === 'auto' || cat === 'large' || cat === 'normal' || cat === 'graphics') a11yCategory = cat;
   const lvl = result?.['dm-a11y-level'];
@@ -9647,6 +9653,12 @@ function renderSettingsView(): string {
     '<button data-dm-custom-cursor="on" style="' + (customCursor ? activeBtn : inactiveBtn) + '">On</button>' +
     '<button data-dm-custom-cursor="off" style="' + (!customCursor ? activeBtn : inactiveBtn) + '">Off</button>' +
     '</div></div>' +
+    '<div style="' + sS + '"><div style="' + sT + '">Source maps</div>' +
+    '<div style="font-size:10px;color:var(--dm-text-dim);margin-bottom:8px;">Resolve edited elements to source files by fetching this page\'s own scripts, stylesheets and .map files — same-origin only, capped at 5 MB and 5 s per file. Off keeps framework hints without network calls.</div>' +
+    '<div style="display:flex;gap:4px;">' +
+    '<button data-dm-sourcemap-fetch="on" style="' + (sourcemapFetch ? activeBtn : inactiveBtn) + '">On</button>' +
+    '<button data-dm-sourcemap-fetch="off" style="' + (!sourcemapFetch ? activeBtn : inactiveBtn) + '">Off</button>' +
+    '</div></div>' +
     (!launchCapabilities.floating ? '' :
     '<div style="' + sS + '"><div style="' + sT + '">Launch</div>' +
     '<div style="font-size:10px;color:var(--dm-text-dim);margin-bottom:8px;">Where the toolbar icon and Alt+D open Design Mode. Pin on top starts a floating opener — your browser needs a click in that window to pin.</div>' +
@@ -10732,6 +10744,7 @@ function setupDelegation() {
           nudgeAmount = 10;
           inputUnit = 'px';
           customCursor = true;
+          sourcemapFetch = true;
           launchSurface = DEFAULT_LAUNCH_SURFACE;
           pipSavedSize = null;
           browser.storage?.local?.remove?.([
@@ -10741,6 +10754,7 @@ function setupDelegation() {
             'dm-overlay-margin-color', 'dm-overlay-padding-color',
             'dm-nudge-amount', 'dm-input-unit',
             'dm-custom-cursor',
+            'dm-sourcemap-fetch',
             'dm-pip-size', 'dm-pip-unsupported',
             LAUNCH_SURFACE_KEY,
           ]);
@@ -11342,6 +11356,16 @@ function setupDelegation() {
     if (customCursorBtn) {
       customCursor = customCursorBtn.dataset.dmCustomCursor === 'on';
       browser.storage?.local?.set?.({ 'dm-custom-cursor': customCursor });
+      render();
+      return;
+    }
+
+    // Source-map fetch gate — same propagation as the page cursor: the
+    // content script watches the key via browser.storage.onChanged.
+    const sourcemapFetchBtn = target.closest<HTMLElement>('[data-dm-sourcemap-fetch]');
+    if (sourcemapFetchBtn) {
+      sourcemapFetch = sourcemapFetchBtn.dataset.dmSourcemapFetch === 'on';
+      browser.storage?.local?.set?.({ 'dm-sourcemap-fetch': sourcemapFetch });
       render();
       return;
     }

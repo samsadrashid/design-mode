@@ -74,6 +74,7 @@ it lives on its own MCP page (Phase 0.7), opened from the header MCP chip.**
 | 0.5.12| Page cursor | Toggle Off with the panel open, then On again | Page cursor swaps **live** (no reload): app-icon cursor (default, On) ↔ plain crosshair; `move` over a selected element stays either way; closing the panel restores the normal cursor |
 | 0.5.13| Launch surface (Chrome) | Settings → Launch → Side panel / Floating / Pin on top | Preference persists as `dm-launch-surface`. Side panel: toolbar click opens the docked panel. Floating: toolbar / Alt+D opens a pop-out window. Pin on top: toolbar / Alt+D opens a floating opener with a focused **Pin on top** button (PiP cannot auto-open). Reset restores Side panel |
 | 0.5.14| Native select menus stay readable | Dark theme (or OS dark) → open any Design-tab / Tokens `<select>` (including size-mode and detected-replace) | Closed control and the native dropdown list are readable — light text on a dark popup, not black-on-black. Keyboard / AT still use the native `<select>` |
+| 0.5.15| Source maps gate | Settings → Source maps → Off, edit a styled element on a dev site that publishes source maps, check the Changes tab source location; repeat with On | Off: source location falls back to framework hints only (raw React line if any), and the Network tab shows **no** `.map` / stylesheet re-fetches from the extension. On: same-origin resource + `.map` requests appear and authored file:line resolves where a map exists. Toggle applies live (no reload); Reset restores On |
 
 ---
 

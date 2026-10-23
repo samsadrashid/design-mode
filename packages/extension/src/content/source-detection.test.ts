@@ -2,6 +2,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { resolveSourceLocation, findSameOriginModuleUrl } from './source-detection.ts';
 import { sanitizeFiberSource } from './page-fiber-source.ts';
+import { applySourcemapFetchValue } from './sourcemap-fetch-setting.ts';
 
 // The fiber bridge crosses the MAIN→isolated world boundary, so its payloads
 // are untrusted. These tests pin the validator and the resolution order
@@ -372,6 +373,182 @@ describe('resolveSourceLocation react refinement', () => {
     } finally {
       env.restore();
       stub.restore();
+    }
+  });
+});
+
+// ── dm-sourcemap-fetch gate ──
+//
+// Fetches are same-origin reads, but still outbound calls: the stored
+// setting must drop every fetch path while framework hints keep working.
+// Distinct hosts per test keep the resolver's module-level caches from
+// serving a cross-test hit.
+
+describe('sourcemap fetch setting gates network resolution', () => {
+  it('keeps the raw React report and fetches nothing when the setting is off', async () => {
+    applySourcemapFetchValue(false);
+    const stub = withMainFiberHit();
+    const fetchCalls: string[] = [];
+    const env = withEnvironment({
+      origin: 'https://off.test',
+      resourceUrls: ['https://off.test/src/Card.jsx'],
+      scriptSrcs: [],
+      fetchRoutes: { 'https://off.test/src/Card.jsx': 'unreachable' },
+      fetchCalls,
+    });
+    try {
+      const loc = await resolveSourceLocation(elWithId('dm-1'));
+      assert.equal(loc?.line, 27);
+      assert.equal(loc?.framework, 'react');
+      assert.deepEqual(fetchCalls, []);
+    } finally {
+      env.restore();
+      stub.restore();
+      applySourcemapFetchValue(true);
+    }
+  });
+
+  it('framework hints still resolve with the setting off', async () => {
+    applySourcemapFetchValue(false);
+    const stub = withBrowserStub(() => assert.fail('isolated hints must short-circuit the bridge'));
+    const fetchCalls: string[] = [];
+    const env = withEnvironment({
+      origin: 'https://hints.test',
+      resourceUrls: ['https://hints.test/src/Card.jsx'],
+      scriptSrcs: [],
+      fetchRoutes: {},
+      fetchCalls,
+    });
+    const el = {
+      getAttribute: () => 'dm-1',
+      __reactFiber$fixture: {
+        _debugSource: { fileName: '/proj/src/Card.jsx', lineNumber: 27, columnNumber: 7 },
+        type: { name: 'Card' },
+      },
+    } as unknown as HTMLElement;
+    try {
+      const loc = await resolveSourceLocation(el);
+      assert.equal(loc?.file, '/proj/src/Card.jsx');
+      assert.equal(loc?.line, 27);
+      assert.equal(loc?.framework, 'react');
+      assert.deepEqual(fetchCalls, []);
+    } finally {
+      env.restore();
+      stub.restore();
+      applySourcemapFetchValue(true);
+    }
+  });
+
+  it('a same-origin stylesheet falls back through the map when the setting is on', async () => {
+    const cssUrl = 'https://on.test/card.css';
+    const mapUrl = 'https://on.test/card.css.map';
+    const fetchCalls: string[] = [];
+    const env = withEnvironment({
+      origin: 'https://on.test',
+      resourceUrls: [],
+      scriptSrcs: [],
+      fetchRoutes: {
+        [cssUrl]: '.gate-card { color: seagreen; }' + String.fromCharCode(10) +
+          '//# sourceMappingURL=card.css.map',
+        [mapUrl]: JSON.stringify({
+          version: 3,
+          sources: ['card.src.css'],
+          names: ['GateCard'],
+          // One segment: generated (0,0) → authored card.src.css (7,6).
+          // VLQ(0)='A', VLQ(7)='O', VLQ(6)='M' → fields [0, 0, 7, 6].
+          mappings: 'AAOM',
+        }),
+      },
+      fetchCalls,
+    });
+    (globalThis as any).document = {
+      ...((globalThis as any).document ?? {}),
+      styleSheets: [{
+        href: cssUrl,
+        ownerNode: { hasAttribute: () => false },
+        cssRules: [{
+          selectorText: '.gate-card',
+          style: { getPropertyValue: (name: string) => (name === 'color' ? 'seagreen' : '') },
+        }],
+      }],
+    };
+    const el = {
+      getAttribute: () => null,
+      matches: (sel: string) => sel === '.gate-card',
+    } as unknown as HTMLElement;
+    try {
+      const loc = await resolveSourceLocation(el);
+      assert.equal(loc?.file, 'card.src.css');
+      assert.equal(loc?.line, 8);
+      assert.deepEqual(fetchCalls, [cssUrl, mapUrl]);
+    } finally {
+      env.restore();
+      applySourcemapFetchValue(true);
+    }
+  });
+
+  it('the same stylesheet resolves to null with zero fetches when the setting is off', async () => {
+    const cssUrl = 'https://disabled.test/card.css';
+    const fetchCalls: string[] = [];
+    const env = withEnvironment({
+      origin: 'https://disabled.test',
+      resourceUrls: [],
+      scriptSrcs: [],
+      fetchRoutes: {},
+      fetchCalls,
+    });
+    (globalThis as any).document = {
+      ...((globalThis as any).document ?? {}),
+      styleSheets: [{
+        href: cssUrl,
+        ownerNode: { hasAttribute: () => false },
+        cssRules: [{
+          selectorText: '.gate-card',
+          style: { getPropertyValue: (name: string) => (name === 'color' ? 'seagreen' : '') },
+        }],
+      }],
+    };
+    const el = {
+      getAttribute: () => null,
+      matches: (sel: string) => sel === '.gate-card',
+    } as unknown as HTMLElement;
+    try {
+      applySourcemapFetchValue(false);
+      const loc = await resolveSourceLocation(el);
+      assert.equal(loc, null);
+      assert.deepEqual(fetchCalls, []);
+    } finally {
+      env.restore();
+      applySourcemapFetchValue(true);
+    }
+  });
+
+  it('re-enabling at runtime restores fetch-based resolution', async () => {
+    applySourcemapFetchValue(false);
+    const stub = withMainFiberHit();
+    const fetchCalls: string[] = [];
+    const env = withEnvironment({
+      origin: 'https://runtime.test',
+      resourceUrls: ['https://runtime.test/src/Card.jsx'],
+      scriptSrcs: [],
+      // No sourceMappingURL comment on the module: refinement fetches the
+      // text once, finds no map, keeps the raw report — enough to prove
+      // fetches resumed after the flip.
+      fetchRoutes: { 'https://runtime.test/src/Card.jsx': 'const x = 1;' },
+      fetchCalls,
+    });
+    try {
+      const off = await resolveSourceLocation(elWithId('dm-1'));
+      assert.equal(off?.line, 27);
+      assert.deepEqual(fetchCalls, []);
+      applySourcemapFetchValue(true);
+      const on = await resolveSourceLocation(elWithId('dm-1'));
+      assert.equal(on?.line, 27);
+      assert.equal(fetchCalls.length, 1);
+    } finally {
+      env.restore();
+      stub.restore();
+      applySourcemapFetchValue(true);
     }
   });
 });

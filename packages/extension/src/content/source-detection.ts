@@ -8,6 +8,7 @@ import type { SourceLocation, ComponentHierarchy } from '@shared/types';
 import { DATA_ATTR } from '@shared/constants';
 import { resolveViaSourceMaps as resolveSourcemapHit, refineReactSourcePosition, type SourcemapHit } from './sourcemap-resolver';
 import { sanitizeFiberSource } from './page-fiber-source';
+import { sourcemapFetchEnabled } from './sourcemap-fetch-setting';
 
 // ── React Fiber Tree Walking ──
 
@@ -255,6 +256,7 @@ export function toSourceLocation(hit: SourcemapHit): SourceLocation {
 }
 
 export async function resolveViaSourceMaps(el: HTMLElement): Promise<SourceLocation | null> {
+  if (!sourcemapFetchEnabled()) return null;
   const hit = await resolveSourcemapHit(el);
   if (!hit) return null;
   return toSourceLocation(hit);
@@ -276,6 +278,7 @@ export async function resolveSourceLocation(el: HTMLElement): Promise<SourceLoca
 // keep the raw report — never a guessed correction.
 async function refineReactLine(hit: SourceLocation): Promise<SourceLocation> {
   if (hit.framework !== 'react' || typeof hit.line !== 'number' || !hit.file || hit.file === 'unknown') return hit;
+  if (!sourcemapFetchEnabled()) return hit;
   try {
     const pageOrigin = typeof location !== 'undefined' ? location.origin : undefined;
     const moduleUrl = findSameOriginModuleUrl(hit.file, pageOrigin);
