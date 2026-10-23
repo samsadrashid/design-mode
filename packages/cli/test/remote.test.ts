@@ -74,9 +74,14 @@ Module._resolveFilename = function(request, ...args) {
   return resolve.call(this, request, ...args);
 };
 `);
+  // NODE_OPTIONS splits on whitespace, so a repo path containing a space
+  // breaks the preload: double-quote the value (supported by Node's
+  // NODE_OPTIONS parser) and force POSIX separators — backslash is an
+  // escape char even inside the quotes.
+  const guardPreload = `--require="${guard.replaceAll('\\', '/')}"`;
   async function cli(args: string[], env: Record<string, string> = {}, input = '', entry = resolve(root, 'dist/cli.cjs')) {
     const child = spawn(process.env.DM_TEST_NODE ?? process.execPath, [entry, ...args], {
-      cwd: dir, env: { PATH: process.env.PATH, HOME: dir, NODE_OPTIONS: `--require=${guard}`, ...env }, stdio: 'pipe',
+      cwd: dir, env: { PATH: process.env.PATH, HOME: dir, NODE_OPTIONS: guardPreload, ...env }, stdio: 'pipe',
     });
     let stdout = '', stderr = '';
     child.stdout.on('data', chunk => { stdout += chunk; });

@@ -14,6 +14,7 @@ import { createCommentStore, COMMENT_STORE_ERROR, COMMENT_PAGE_ERROR } from './c
 import { createSessionStore } from './session-store';
 import type { OpenRouteResponse } from '@shared/messages';
 import { readPageComponentContexts } from '../content/page-component-context';
+import { readPageFiberSources, sanitizeFiberSource } from '../content/page-fiber-source';
 import { openPanel, setActionOpensPanel, createFirefoxDock } from '../platform/panel';
 import {
   detectLaunchCapabilities, supportedLaunchSurface,
@@ -699,6 +700,20 @@ function dispatchPanelMessage(msg: any, sender: chrome.runtime.MessageSender, se
       }
       sendResponse(contexts);
     }).catch(() => sendResponse({}));
+    return true;
+  }
+  if (msg.type === 'GET_FIBER_SOURCE') {
+    const tabId = sender.tab?.id;
+    const id = typeof msg.elementId === 'string' ? msg.elementId : '';
+    if (tabId == null || !/^dm-[\w-]{1,100}$/.test(id)) { sendResponse(null); return true; }
+    browser.scripting.executeScript({
+      target: { tabId, frameIds: [sender.frameId ?? 0] },
+      world: 'MAIN',
+      func: readPageFiberSources,
+      args: [[id]],
+    }).then(results => {
+      sendResponse(sanitizeFiberSource(results[0]?.result?.[id]));
+    }).catch(() => sendResponse(null));
     return true;
   }
   if (msg.type === 'SP_EXPORT') {

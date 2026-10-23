@@ -10,6 +10,7 @@
 // content/index.ts.
 
 import { getTokenIndex, type DesignSystemId } from './token-engine';
+import { MANAGED_SHEET_ATTR } from '@shared/constants';
 
 export type TokenEdit = {
   cssVar: string;
@@ -36,6 +37,7 @@ function overrideSheet(): HTMLStyleElement {
   if (!el) {
     el = document.createElement('style');
     el.id = 'dm-token-overrides';
+    el.setAttribute(MANAGED_SHEET_ATTR, '');
     (document.head || document.documentElement).appendChild(el);
   }
   return el;

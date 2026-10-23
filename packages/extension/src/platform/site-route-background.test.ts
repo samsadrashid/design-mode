@@ -52,7 +52,7 @@ function harness() {
       if (path.endsWith('/analytics')) return { isAnalyticsSender, createAnalytics: () => ({ start() {}, stop() {}, refresh() {}, track() {} }) };
       if (path === './comment-store') return { createCommentStore };
       if (path === './session-store') return { createSessionStore };
-      if (path.endsWith('/polyfill') || path.endsWith('/page-component-context')) return {};
+      if (path.endsWith('/polyfill') || path.endsWith('/page-component-context') || path.endsWith('/page-fiber-source')) return {};
       if (path.endsWith('/target')) return { IS_FIREFOX: false };
       if (path.endsWith('/panel')) return { setActionOpensPanel() {} };
       if (path.endsWith('/launch-surface')) return {

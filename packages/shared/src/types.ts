@@ -196,6 +196,9 @@ export interface StyleChange {
   // changes recorded before this shipped.
   viewportWidth?: number;
   breakpoint?: Breakpoint;
+  // Resolved element origin (framework hint or Source Map v3). Attached
+  // asynchronously by the extension; omitted when unresolvable — never null.
+  sourceLocation?: SourceLocation;
 }
 
 // --- Text Change ---
@@ -211,6 +214,7 @@ export interface TextChange {
   status?: ChangeStatus;
   viewportWidth?: number;
   breakpoint?: Breakpoint;
+  sourceLocation?: SourceLocation;
 }
 
 // --- Comment ---

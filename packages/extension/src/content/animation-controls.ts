@@ -5,6 +5,7 @@
 // ============================================================
 
 import type { AnimationState } from '@shared/types';
+import { MANAGED_SHEET_ATTR } from '@shared/constants';
 
 let frozen = false;
 let freezeStyleEl: HTMLStyleElement | null = null;
@@ -18,6 +19,7 @@ export function freezeAnimations(): void {
   // 1. CSS animations + transitions: pause via a global stylesheet override.
   freezeStyleEl = document.createElement('style');
   freezeStyleEl.id = 'dm-freeze-animations';
+  freezeStyleEl.setAttribute(MANAGED_SHEET_ATTR, '');
   freezeStyleEl.textContent = `
     *, *::before, *::after {
       animation-play-state: paused !important;

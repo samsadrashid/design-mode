@@ -4,6 +4,7 @@
 // ============================================================
 
 import { getElementById, generateSelector, describeElement, getComputedStyleSubset, reserveIdsAtLeast } from './helpers';
+import { MANAGED_SHEET_ATTR } from '@shared/constants';
 import { authoredTokenValueFor, bumpStyleGen } from './token-engine';
 import { DEFAULT_WS_PORT, DATA_ATTR, classifyBreakpoint, type Breakpoint } from '../shared';
 import { BUILTIN_KEYFRAMES } from './keyframes-library';
@@ -16,6 +17,8 @@ import { isSafeRichTextHref, normalizeRichTextHref, replaceRichTextHtml, restore
 import { IMPORT_STATES, validateImportPayload } from './import-validation';
 import { restoreSavedDomLocations } from './saved-session';
 import { userOverrideScope, setUserOverridesEnabled, syncUserStyles } from './user-styles';
+import { resolveSourceLocation } from './source-detection';
+import type { SourceLocation } from '@shared/types';
 
 // Lifecycle a coding agent drives over MCP: untouched → working → done.
 // Absent ⇒ 'todo'. Mirrors @design-mode/shared ChangeStatus.
@@ -42,6 +45,9 @@ export interface StyleChange {
   groupLabel?: string;
   viewportWidth?: number;
   breakpoint?: Breakpoint;
+  // Resolved element origin (framework hint or Source Map v3). Attached
+  // asynchronously after recording; omitted when unresolvable — never null.
+  sourceLocation?: SourceLocation;
 }
 
 export interface StyleChangeMeta {
@@ -61,6 +67,7 @@ export interface TextChange {
   status?: ChangeStatus;
   viewportWidth?: number;
   breakpoint?: Breakpoint;
+  sourceLocation?: SourceLocation;
 }
 
 export interface DomChange {
@@ -83,6 +90,7 @@ export interface DomChange {
   status?: ChangeStatus;
   viewportWidth?: number;
   breakpoint?: Breakpoint;
+  sourceLocation?: SourceLocation;
 }
 
 // Breakpoint metadata captured at record time. The page viewport width here
@@ -357,9 +365,15 @@ function buildOverlayCss(elementId: string, value: string): string {
 function ensureStyleEl(): HTMLStyleElement {
   if (appliedStyleEl && appliedStyleEl.isConnected) return appliedStyleEl;
   const existing = document.getElementById('dm-applied-styles') as HTMLStyleElement | null;
-  if (existing) { appliedStyleEl = existing; return existing; }
+  if (existing) {
+    // A sheet left by a previous injection already predates the marker.
+    existing.setAttribute(MANAGED_SHEET_ATTR, '');
+    appliedStyleEl = existing;
+    return existing;
+  }
   const el = document.createElement('style');
   el.id = 'dm-applied-styles';
+  el.setAttribute(MANAGED_SHEET_ATTR, '');
   (document.head || document.documentElement).appendChild(el);
   appliedStyleEl = el;
   return el;
@@ -1075,6 +1089,7 @@ export function applyStyleChange(
     styleChanges[existingIdx] = merged;
     syncChange(merged);
     persistSession();
+    void attachSourceLocation(el, merged, syncChange);
     if (refreshPanel) refreshPanel();
     return merged;
   }
@@ -1100,6 +1115,7 @@ export function applyStyleChange(
   styleChanges.push(change);
   syncChange(change);
   persistSession();
+  void attachSourceLocation(el, change, syncChange);
   if (refreshPanel) refreshPanel();
   // Dev-only canary: log every applyStyle attempt with before → after
   // computed values. Most rows will be `✓ moved`; any `✗ no-op` line
@@ -1169,6 +1185,7 @@ export function applyTextChange(
     textChanges[existingIdx] = merged;
     syncTextChange(merged);
     persistSession();
+    void attachSourceLocation(el, merged, syncTextChange);
     if (refreshPanel) refreshPanel();
     return merged;
   }
@@ -1181,6 +1198,7 @@ export function applyTextChange(
   textChanges.push(change);
   syncTextChange(change);
   persistSession();
+  void attachSourceLocation(el, change, syncTextChange);
   if (refreshPanel) refreshPanel();
   return change;
 }
@@ -1220,6 +1238,7 @@ export function applyHtmlChange(
     textChanges[existingIdx] = merged;
     syncTextChange(merged);
     persistSession();
+    void attachSourceLocation(el, merged, syncTextChange);
     if (refreshPanel) refreshPanel();
     return merged;
   }
@@ -1232,6 +1251,7 @@ export function applyHtmlChange(
   textChanges.push(change);
   syncTextChange(change);
   persistSession();
+  void attachSourceLocation(el, change, syncTextChange);
   if (refreshPanel) refreshPanel();
   return change;
 }
@@ -1265,6 +1285,7 @@ export function applyAttributeChange(
     textChanges[existingIdx] = merged;
     syncTextChange(merged);
     persistSession();
+    void attachSourceLocation(el, merged, syncTextChange);
     if (refreshPanel) refreshPanel();
     return merged;
   }
@@ -1277,6 +1298,7 @@ export function applyAttributeChange(
   textChanges.push(change);
   syncTextChange(change);
   persistSession();
+  void attachSourceLocation(el, change, syncTextChange);
   if (refreshPanel) refreshPanel();
   return change;
 }
@@ -1370,7 +1392,49 @@ export function recordDomChange(
   domChanges.push(change);
   syncDomChange(change);
   persistSession();
+  void attachSourceLocation(recordedEl, change, syncDomChange);
   return change;
+}
+
+// ── Async source-location attach ────────────────────────────────────
+// Agents land source edits faster when each change row carries the
+// element's file:line (framework hints first, Source Map v3 fallback —
+// source-detection.ts). Resolution may fetch .map files over the
+// network, so it NEVER delays recording or the STYLE_CHANGED /
+// TEXT_CHANGED / DOM_CHANGED frame: the change is recorded and sent
+// first; the location attaches afterwards and the live record is
+// re-synced (the local server upserts by id) and re-persisted so
+// reloads keep it. One resolution per element — the WeakMap caches the
+// in-flight promise, so repeated edits on the same element resolve
+// once. Unresolvable elements cache null and the record simply never
+// grows a sourceLocation key (reports never carry null locations).
+
+const sourceLocationCache = new WeakMap<HTMLElement, Promise<SourceLocation | null>>();
+
+function resolveElementSource(el: HTMLElement): Promise<SourceLocation | null> {
+  let pending = sourceLocationCache.get(el);
+  if (!pending) {
+    pending = Promise.resolve().then(() => resolveSourceLocation(el)).catch(() => null);
+    sourceLocationCache.set(el, pending);
+  }
+  return pending;
+}
+
+async function attachSourceLocation<T extends StyleChange | TextChange | DomChange>(
+  el: HTMLElement | null, change: T, sync: (change: T) => void,
+): Promise<void> {
+  if (!el) return;
+  const loc = await resolveElementSource(el);
+  if (!loc) return;
+  // The record may have been reverted, cleared or replaced by a merged
+  // duplicate while we awaited — only live records get the attach.
+  const live = styleChanges.includes(change as StyleChange)
+    || textChanges.includes(change as TextChange)
+    || domChanges.includes(change as DomChange);
+  if (!live) return;
+  change.sourceLocation = loc;
+  sync(change);
+  persistSession();
 }
 
 // Flip status on style/text/DOM changes by id. Omit `ids` ⇒ all. Returns
@@ -1439,6 +1503,7 @@ export function getChangeReport() {
         viewportWidth: c.viewportWidth, breakpoint: c.breakpoint,
         selector, label: c.label, property: c.property,
         oldValue: c.oldValue, newValue: c.newValue,
+        ...(c.sourceLocation ? { sourceLocation: c.sourceLocation } : {}),
         cssRule: `${selector} { ${c.property.replace(/[A-Z]/g,m=>'-'+m.toLowerCase())}: ${c.newValue}; }`,
       };
     }),
@@ -1448,6 +1513,7 @@ export function getChangeReport() {
       viewportWidth: c.viewportWidth, breakpoint: c.breakpoint,
       selector: liveSelector(c.elementId, c.selector), label: c.label,
       oldText: c.oldText, newText: c.newText, attributeName: c.attributeName,
+      ...(c.sourceLocation ? { sourceLocation: c.sourceLocation } : {}),
     })),
     domChanges: domChanges.map(c => {
       // Moves carry both ends: origin's parent selector re-resolved via
@@ -1474,6 +1540,7 @@ export function getChangeReport() {
         selector: el ? generateSelector(el) : c.selector, label: c.label,
         action: c.action, tagName: c.tagName,
         origin, destination,
+        ...(c.sourceLocation ? { sourceLocation: c.sourceLocation } : {}),
       };
     }),
     cssBlock: generateCSSBlock(),

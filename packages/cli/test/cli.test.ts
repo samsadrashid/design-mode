@@ -161,15 +161,20 @@ Module._resolveFilename = function(request, ...args) {
   if (!Module.builtinModules.includes(request.replace(/^node:/, '')) && !path.isAbsolute(request)) throw new Error('External dependency forbidden');
   return original.call(this, request, ...args);
 };\n`);
+    // NODE_OPTIONS splits on whitespace, so a repo path containing a space
+    // breaks the preload: double-quote the value (supported by Node's
+    // NODE_OPTIONS parser) and force POSIX separators — backslash is an
+    // escape char even inside the quotes.
+    const guardPreload = `--require="${guard.replaceAll('\\', '/')}"`;
     const result = await cli(['tools'], await freePort(), '', resolve(dir, 'package/dist/cli.cjs'), {
-      NODE_OPTIONS: `--require=${guard}`,
+      NODE_OPTIONS: guardPreload,
     });
     assert.equal(result.code, 0, result.stderr);
     assert.equal(result.json().tools.length, 9);
     const port = await freePort();
     const owner = await claimOrAttach(port);
     try {
-      const summary = await cli(['call', 'get_session_summary'], port, '', resolve(dir, 'package/dist/cli.cjs'), { NODE_OPTIONS: `--require=${guard}` });
+      const summary = await cli(['call', 'get_session_summary'], port, '', resolve(dir, 'package/dist/cli.cjs'), { NODE_OPTIONS: guardPreload });
       assert.equal(summary.code, 0, summary.stderr);
       assert.equal(JSON.parse(summary.json().result.content[0].text).extensionConnected, false);
     } finally { await owner.close(); }

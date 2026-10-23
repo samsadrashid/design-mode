@@ -20,6 +20,17 @@ const base = {
   status: z.enum(['todo', 'in_progress', 'resolved']).optional(),
   viewportWidth: number.nonnegative().optional(),
   breakpoint: z.enum(['mobile', 'tablet', 'desktop']).optional(),
+  // Resolved element origin (framework hint or Source Map v3). Records may
+  // carry it or not — old exports stay valid, resolved ones survive replay.
+  sourceLocation: z.object({
+    file: z.string().min(1).max(4096),
+    line: number.int().nonnegative().max(10_000_000).optional(),
+    column: number.int().nonnegative().max(10_000_000).optional(),
+    component: str.optional(),
+    framework: z.enum(['react', 'vue', 'angular', 'svelte', 'unknown']),
+    bundlerUrl: str.optional(),
+    cleanPath: str.optional(),
+  }).optional(),
 };
 const loc = z.object({ parentSelector: selector, parentId: id.optional(), index: number.int().nonnegative().max(1_000_000) });
 const style = z.object({ ...base,
