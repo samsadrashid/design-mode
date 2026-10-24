@@ -25,7 +25,7 @@ import { showHover, hideHover, showSelect, hideSelect, destroyOverlays, resetOve
 import { enableInspect, disableInspect, isInspectActive, getSelectedElementId, hasExplicitSelection, setSelectedElementId, buildElementInfo, getComputedStylesBlock } from './inspector';
 import type { ElementInfo } from './inspector';
 import { initCustomCursor, applyBaseCursor, clearBaseCursor } from './custom-cursor';
-import { getStyleChanges, getTextChanges, getDomChanges, clearAllChanges, applyStyleChange, applyWithCompanions, computeCompanions, applyTextChange, applyHtmlChange, applyAttributeChange, removeStyleChange, removeDomChange, removeTextChange, recordDomChange, connectToServer, disconnectFromServer, isConnected, isAgentConnected, getChangeReport, reorderChange, getAllChanges, replaySession, setOverridesEnabled, applyChangesPayload, setUnhandledMessageHandler, sendRelayResponse, setChangesStatus, syncCommentChange, syncCommentDeleted, stageAgentHandoff, getFeedbackSessionView, isLiveFeedbackSupported, stopFeedbackSessionFromUi } from './change-tracker';
+import { getStyleChanges, getTextChanges, getDomChanges, clearAllChanges, applyStyleChange, applyWithCompanions, computeCompanions, applyTextChange, applyHtmlChange, applyAttributeChange, removeStyleChange, removeDomChange, removeTextChange, recordDomChange, connectToServer, disconnectFromServer, isConnected, isAgentConnected, ensureLocalTransport, getChangeReport, reorderChange, getAllChanges, replaySession, setOverridesEnabled, applyChangesPayload, setUnhandledMessageHandler, sendRelayResponse, setChangesStatus, syncCommentChange, syncCommentDeleted, stageAgentHandoff, getFeedbackSessionView, isLiveFeedbackSupported, stopFeedbackSessionFromUi } from './change-tracker';
 import { isSafeRichTextHref } from '../rich-text-preservation';
 import { copyElement, pasteElement, duplicateElement, moveElement } from './html-editor';
 import { isTypingTarget } from './shortcut-binding';
@@ -1216,10 +1216,8 @@ function handleContentMessage(msg: any, _: any, sendResponse: (payload: any) => 
       if (msg.reping === true) {
         browser.storage.local.get(['dm-mcp-mode', 'dm-mcp-port']).then(async (saved) => {
           if (saved['dm-mcp-mode'] !== 'local') { respond(); return; }
-          const result = await browser.runtime.sendMessage({
-            type: 'GET_LOCAL_MCP_TOKEN', port: saved['dm-mcp-port'] ?? DEFAULT_WS_PORT,
-          });
-          respond(typeof result?.token === 'string');
+          const port = typeof saved['dm-mcp-port'] === 'number' ? saved['dm-mcp-port'] : DEFAULT_WS_PORT;
+          respond(await ensureLocalTransport(port));
         }).catch(() => respond(false));
         return true;
       }
