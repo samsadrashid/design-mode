@@ -749,7 +749,20 @@ function dispatchPanelMessage(msg: any, sender: chrome.runtime.MessageSender, se
   // handler, which stages the handoff and pushes it over the MCP transport.
   // SP_GET_FEEDBACK_SESSION / SP_STOP_FEEDBACK_SESSION likewise fall through
   // to GET_FEEDBACK_SESSION / STOP_FEEDBACK_SESSION. Do not add rows here.
-  if (msg.type === 'SP_GET_MCP_STATUS') { forwardToPinnedTab({ type: 'GET_MCP_STATUS', reping: msg.reping === true }, sendResponse); return true; }
+  if (msg.type === 'SP_GET_MCP_STATUS') {
+    // The panel renders state straight off this response, so a missing or
+    // erroring content script must still resolve to a structured report —
+    // a bare `{ error }` would otherwise read as a silent hang.
+    forwardToPinnedTab({ type: 'GET_MCP_STATUS', reping: msg.reping === true }, (res) => {
+      if (res && typeof res === 'object' && !res.error) { sendResponse(res); return; }
+      sendResponse({
+        connected: false, serverRunning: false, agentConnected: false, mcpState: 'offline',
+        state: 'error',
+        error: (res && typeof res.error === 'string' && res.error) || 'Design Mode is not active in the pinned tab',
+      });
+    });
+    return true;
+  }
   if (msg.type === 'SP_GET_DESIGN_TOKENS') { forwardToPinnedTab({ type: 'GET_DESIGN_TOKENS' }, sendResponse); return true; }
   if (msg.type === 'SP_GET_COMPUTED_CSS') { forwardToPinnedTab({ type: 'GET_COMPUTED_CSS', elementId: msg.elementId }, sendResponse); return true; }
   if (msg.type === 'SP_PREVIEW_ORIGINAL') { forwardToPinnedTab({ type: 'PREVIEW_ORIGINAL' }, sendResponse); return true; }

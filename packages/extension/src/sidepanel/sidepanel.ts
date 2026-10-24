@@ -1059,7 +1059,12 @@ async function refreshMcpStatus(reping = false, operation = beginInspectorOperat
   const generation = pageGeneration;
   const res = await operation.wait(send({ type: 'SP_GET_MCP_STATUS', reping }, operation));
   if (request !== mcpStatusRequest || generation !== pageGeneration) return;
-  mcpState = !res.connected ? 'offline' : res.agentConnected ? 'connected' : 'running';
+  // A missing content script surfaces as `{}` / `{ error }` — map both to
+  // offline rather than reading state off undefined fields. A reachable
+  // server with the tab socket still opening reports as running.
+  mcpState = res.error ? 'offline'
+    : !res.connected ? (res.serverRunning ? 'running' : 'offline')
+    : res.agentConnected ? 'connected' : 'running';
   await operation.wait(refreshFeedbackSession(operation));
   render();
 }
@@ -10367,7 +10372,7 @@ function setupDelegation() {
         case 'copy-svg-markup': runInspectorAction(copySvgMarkup(operation)); break;
         case 'undo': runInspectorAction(undoAction(operation)); break;
         case 'redo': runInspectorAction(redoAction(operation)); break;
-        case 'connect-mcp': runInspectorAction(send({ type: 'SP_RECONFIGURE_TRANSPORT' }, operation)); break;
+        case 'connect-mcp': runInspectorAction(send({ type: 'SP_RECONFIGURE_TRANSPORT' }, operation).then(() => refreshMcpStatus(true, operation))); break;
         case 'refresh-mcp': {
           const before = mcpState;
           runInspectorAction(refreshMcpStatus(true, operation).then(() => {

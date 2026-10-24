@@ -2126,3 +2126,17 @@ export function disconnectFromServer(opts?: { preserveSession?: boolean }) {
   if (sseAbort) { try { sseAbort.abort(); } catch {} sseAbort = null; }
   setAgentConnected(false);
 }
+
+// Re-ping probe for the panel's status refresh. The local reconnect budget
+// is usually already spent by the time the companion server appears (the
+// agent spawns it after the page loaded), so proving reachability here also
+// reopens the transport instead of reporting a dead socket forever.
+export async function ensureLocalTransport(port: number, openWaitMs = 2000): Promise<boolean> {
+  if (isConnected()) return true;
+  const response = await browser.runtime.sendMessage({ type: 'GET_LOCAL_MCP_TOKEN', port }).catch(() => null);
+  if (typeof response?.token !== 'string') return false;
+  connectToServer({ mode: 'local', port });
+  const deadline = Date.now() + openWaitMs;
+  while (!isConnected() && Date.now() < deadline) await new Promise(r => setTimeout(r, 50));
+  return isConnected();
+}
